@@ -91,8 +91,29 @@ export async function POST(req:NextRequest) {
             return NextResponse.json({error: "Missing meetingId"}, {status:400});
         }
 
-        const call = streamVideo.video.call("default", meetingId);
-        await call.end();
+        try {
+            const call = streamVideo.video.call("default", meetingId);
+            const callResponse = await call.get();
+            
+            // Only end the call if there are no more human participants (excluding AI agents)
+            const [existingMeeting] = await db.select().from(meetings).where(eq(meetings.id, meetingId));
+            if (!existingMeeting) {
+                return NextResponse.json({error: "Meeting not found"}, {status: 404});
+            }
+
+            // Get remaining participants
+            const participants = callResponse?.call?.session?.participants || [];
+            const humanParticipants = participants.filter(
+                (p) => p.user?.id !== existingMeeting.agentId
+            );
+
+            // If no human participants remain, end the call
+            if (humanParticipants.length === 0) {
+                await call.end();
+            }
+        } catch (error) {
+            console.error("Error handling participant left:", error);
+        }
     } else if(eventType === "call.session_ended"){
         const event = payload as CallEndedEvent;
         const meetingId = event.call.custom?.meetingId;
